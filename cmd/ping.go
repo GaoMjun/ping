@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"time"
 
-	"ping"
+	"github.com/GaoMjun/ping"
 )
 
 func main() {

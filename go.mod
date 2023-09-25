@@ -1,4 +1,4 @@
-module ping
+module github.com/GaoMjun/ping
 
 go 1.19
 
