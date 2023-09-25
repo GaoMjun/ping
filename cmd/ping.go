@@ -4,8 +4,9 @@ import (
 	"flag"
 	"os"
 	"os/signal"
-	"ping"
 	"time"
+
+	"github.com/GaoMjun/ping"
 )
 
 func main() {
