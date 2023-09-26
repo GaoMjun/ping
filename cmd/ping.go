@@ -27,11 +27,11 @@ func main() {
 		}
 	}()
 
-	ping, _ := ping.New(*srcIP, host, logChan)
+	ping := ping.New(*srcIP, host, logChan)
 
 	go ping.Run()
 
 	<-endChan
 	ping.Stop()
-	time.Sleep(time.Millisecond * 100)
+	time.Sleep(time.Second * 100)
 }

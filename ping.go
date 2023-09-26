@@ -21,9 +21,10 @@ type Pinger struct {
 	send, recv                                  int
 	loss                                        float64
 	minRtt, maxRtt, avgRtt, stdDevRtt, stddevm2 time.Duration
+	ipConn                                      *net.IPConn
 }
 
-func New(srcIP, host string, logChan chan string) (self *Pinger, err error) {
+func New(srcIP, host string, logChan chan string) (self *Pinger) {
 	self = &Pinger{
 		timeout:  2 * time.Second,
 		interval: 1 * time.Second,
@@ -36,18 +37,20 @@ func New(srcIP, host string, logChan chan string) (self *Pinger, err error) {
 		self.srcIP = srcIP
 	}
 
+	var err error
+
 	if self.laddr, err = net.ResolveIPAddr("ip", self.srcIP); err != nil {
-		return
+		panic(err)
 	}
 
 	var ips []net.IP
 	if ips, err = net.LookupIP(host); err != nil {
-		return
+		panic(err)
 	}
 
 	if len(ips) <= 0 {
 		err = fmt.Errorf("host %s not found", host)
-		return
+		panic(err)
 	}
 
 	self.raddr = &net.IPAddr{IP: ips[0]}
@@ -57,8 +60,6 @@ func New(srcIP, host string, logChan chan string) (self *Pinger, err error) {
 func (self *Pinger) Run() {
 	var (
 		err error
-
-		ipConn *net.IPConn
 	)
 	defer func() {
 		if err != nil {
@@ -66,19 +67,23 @@ func (self *Pinger) Run() {
 		}
 	}()
 
-	if ipConn, err = net.DialIP("ip4:icmp", self.laddr, self.raddr); err != nil {
+	if self.ipConn, err = net.DialIP("ip4:icmp", self.laddr, self.raddr); err != nil {
 		return
 	}
-	defer ipConn.Close()
+	defer self.ipConn.Close()
 
-	// paylad := make([]byte, 48)
-	buf := gopacket.NewSerializeBuffer()
-	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	ping := &layers.ICMPv4{
-		TypeCode: layers.CreateICMPv4TypeCode(layers.ICMPv4TypeEchoRequest, layers.ICMPv4CodeNet),
-		Id:       uint16(rand.Uint32()),
-		Seq:      0,
-	}
+	var (
+		buf  = gopacket.NewSerializeBuffer()
+		opts = gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+		ping = &layers.ICMPv4{
+			TypeCode: layers.CreateICMPv4TypeCode(layers.ICMPv4TypeEchoRequest, layers.ICMPv4CodeNet),
+			Id:       uint16(rand.Uint32()),
+			Seq:      0,
+			BaseLayer: layers.BaseLayer{
+				Payload: make([]byte, 56),
+			},
+		}
+	)
 
 	if self.logChan != nil {
 		self.logChan <- fmt.Sprintf("PING %s (%s): %d data bytes\n", self.host, self.raddr, len(ping.Payload))
@@ -86,14 +91,15 @@ func (self *Pinger) Run() {
 
 	for {
 		ping.Seq += 1
+
 		gopacket.SerializeLayers(buf, opts, ping)
 		wbuf := buf.Bytes()
 
-		ipConn.SetWriteDeadline(time.Now().Add(self.timeout))
+		self.ipConn.SetWriteDeadline(time.Now().Add(self.timeout))
 
 		now := time.Now()
 
-		if _, err = ipConn.Write(wbuf); err != nil {
+		if _, err = self.ipConn.Write(wbuf); err != nil {
 			log.Println(err)
 			return
 		}
@@ -104,9 +110,9 @@ func (self *Pinger) Run() {
 		n := 0
 
 		for {
-			ipConn.SetReadDeadline(time.Now().Add(self.timeout))
+			self.ipConn.SetReadDeadline(time.Now().Add(self.timeout))
 
-			if n, err = ipConn.Read(rbuf); err != nil {
+			if n, err = self.ipConn.Read(rbuf); err != nil {
 				// log.Println(err)
 				if self.logChan != nil {
 					self.logChan <- fmt.Sprintf("Request timeout for icmp_seq %d\n", ping.Seq)
@@ -141,11 +147,13 @@ func (self *Pinger) Run() {
 			}
 		}
 
-		time.Sleep(time.Second)
+		time.Sleep(self.interval)
 	}
 }
 
 func (self *Pinger) Stop() {
+	self.ipConn.Close()
+
 	if self.logChan != nil {
 		self.logChan <- fmt.Sprintf("--- %s ping statistics ---\n", self.host)
 		self.logChan <- fmt.Sprintf("%d packets transmitted, %d packets received, %.1f%% packet loss\n", self.send, self.recv, self.loss)
