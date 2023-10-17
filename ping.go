@@ -2,7 +2,6 @@ package ping
 
 import (
 	"fmt"
-	"log"
 	"math"
 	"math/rand"
 	"net"
@@ -64,7 +63,7 @@ func (self *Pinger) Run(d time.Duration) {
 	)
 	defer func() {
 		if err != nil {
-			log.Println(err)
+			// log.Println(err)
 			return
 		}
 
