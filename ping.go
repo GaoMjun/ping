@@ -22,6 +22,7 @@ type Pinger struct {
 	loss                                        float64
 	minRtt, maxRtt, avgRtt, stdDevRtt, stddevm2 time.Duration
 	ipConn                                      *net.IPConn
+	running                                     bool
 }
 
 func New(srcIP, host string, logChan chan string) (self *Pinger) {
@@ -57,13 +58,21 @@ func New(srcIP, host string, logChan chan string) (self *Pinger) {
 	return
 }
 
-func (self *Pinger) Run() {
+func (self *Pinger) Run(d time.Duration) {
 	var (
 		err error
 	)
 	defer func() {
 		if err != nil {
 			log.Println(err)
+			return
+		}
+
+		if self.logChan != nil {
+			self.logChan <- fmt.Sprintf("--- %s ping statistics ---\n", self.host)
+			self.logChan <- fmt.Sprintf("%d packets transmitted, %d packets received, %.1f%% packet loss\n", self.send, self.recv, self.loss)
+			self.logChan <- fmt.Sprintf("round-trip min/avg/max/stddev = %.03f/%.03f/%.03f/%.03f ms\n",
+				self.minRtt.Seconds()*1000, self.avgRtt.Seconds()*1000, self.maxRtt.Seconds()*1000, self.stdDevRtt.Seconds()*1000)
 		}
 	}()
 
@@ -71,6 +80,8 @@ func (self *Pinger) Run() {
 		return
 	}
 	defer self.ipConn.Close()
+
+	self.running = true
 
 	var (
 		buf  = gopacket.NewSerializeBuffer()
@@ -83,6 +94,7 @@ func (self *Pinger) Run() {
 				Payload: make([]byte, 56),
 			},
 		}
+		start = time.Now()
 	)
 
 	if self.logChan != nil {
@@ -90,6 +102,14 @@ func (self *Pinger) Run() {
 	}
 
 	for {
+		if !self.running {
+			return
+		}
+
+		if d > 0 && time.Since(start) > d {
+			return
+		}
+
 		ping.Seq += 1
 
 		gopacket.SerializeLayers(buf, opts, ping)
@@ -100,7 +120,7 @@ func (self *Pinger) Run() {
 		now := time.Now()
 
 		if _, err = self.ipConn.Write(wbuf); err != nil {
-			log.Println(err)
+			err = nil
 			return
 		}
 		self.send += 1
@@ -152,15 +172,7 @@ func (self *Pinger) Run() {
 }
 
 func (self *Pinger) Stop() {
-	self.ipConn.Close()
-
-	if self.logChan != nil {
-		self.logChan <- fmt.Sprintf("--- %s ping statistics ---\n", self.host)
-		self.logChan <- fmt.Sprintf("%d packets transmitted, %d packets received, %.1f%% packet loss\n", self.send, self.recv, self.loss)
-		self.logChan <- fmt.Sprintf("round-trip min/avg/max/stddev = %.03f/%.03f/%.03f/%.03f ms\n",
-			self.minRtt.Seconds()*1000, self.avgRtt.Seconds()*1000, self.maxRtt.Seconds()*1000, self.stdDevRtt.Seconds()*1000)
-	}
-	return
+	self.running = false
 }
 
 func (self *Pinger) Stats(rtt time.Duration) {
@@ -187,4 +199,8 @@ func (self *Pinger) Stats(rtt time.Duration) {
 	self.stddevm2 += delta * delta2
 
 	self.stdDevRtt = time.Duration(math.Sqrt(float64(self.stddevm2 / count)))
+}
+
+func (self *Pinger) GetStats() (float64, time.Duration, time.Duration, time.Duration, time.Duration, time.Duration) {
+	return self.loss, self.minRtt, self.maxRtt, self.avgRtt, self.stdDevRtt, self.stddevm2
 }
